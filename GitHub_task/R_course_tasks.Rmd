@@ -1,0 +1,146 @@
+---
+title: "R_course_tasks"
+author: "Dmitrii Belousov"
+date: "2024-09-01"
+output: 
+  word_document:
+    toc: yes
+    toc_depth: 3
+toc_title: "Оглавление"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(flextable)
+library(dplyr)
+library(psych)
+library(readr)
+```
+
+```{r pressure, echo=TRUE, eval=TRUE}
+plot(pressure)
+```
+
+# Data Import
+
+```{r, echo=TRUE, eval=FALSE}
+url <- "https://stepik.org/media/attachments/lesson/790859/numeric_data.rds"
+destination_directory <- "./"
+destination_file <- paste0(destination_directory, "numeric_data.rds")
+download.file(url, destfile = destination_file, method = "auto")
+```
+
+```{r, echo=T, eval=T}
+numeric_data <- read_rds("./numeric_data.rds")
+```
+
+```{r, echo=TRUE, eval=FALSE}
+url <- "https://stepik.org/media/attachments/lesson/790859/factor_data.rds"
+destination_directory <- "./"
+destination_file <- paste0(destination_directory, "factor_data.rds")
+download.file(url, destfile = destination_file, method = "auto")
+```
+
+```{r, echo=T, eval=T}
+factor_data <- read_rds("./factor_data.rds")
+```
+
+```{r, echo=TRUE, eval=FALSE}
+url <- "https://stepik.org/media/attachments/lesson/790863/data_tsv.tsv"
+destination_directory <- "./raw/"
+destination_file <- paste0(destination_directory, "data.tsv")
+download.file(url, destfile = destination_file, method = "auto")
+```
+
+```{r}
+data <- read.csv("./raw/data.tsv", sep='\t', na.strings = "")
+```
+
+# Statistics
+
+## Summary
+
+```{r, echo=T, eval=T}
+summary(numeric_data)
+```
+
+```{r}
+psych::describe(numeric_data)
+```
+
+```{r}
+factor_data$Группа <- iconv(factor_data$Группа, from = "Windows-1251", to = "UTF-8")
+
+table(factor_data$Группа, factor_data$`Группа крови`)
+```
+
+## Dplyr
+
+```{r}
+data <- as_tibble(data)
+head(data)
+```
+
+```{r}
+data %>% 
+  select(`Возраст`, function(x) any(str_detect(x, "Жен"))) %>% 
+  View()
+```
+
+### Select
+
+```{r}
+
+columns_to_print <- c("Батч", "Базофилы_E2")
+
+data %>% 
+  select(`Группа`, where(is.numeric)) %>% 
+  select(`Батч` = `Группа`, starts_with("Б")) %>% 
+  select(all_of(columns_to_print)) %>% 
+  slice_sample(prop = .1)
+```
+
+### Filter
+
+```{r}
+data %>% 
+  filter(`Пол` == 'Женский' 
+         & `Группа.крови` %in% c('A (II)', 'O (I)') 
+         & between(`Возраст`, 20, 50) 
+         & if_any(.cols = contains("_E2"), .fns = function(x) near(x, 1.5, tol = 0.3)))
+  
+```
+
+### Mutate
+
+```{r}
+data <- data %>% 
+  mutate(Elderly = ifelse(`Возраст` >= median(`Возраст`, na.rm = TRUE), "Yes", "No")) %>% 
+  mutate(Age_Group = case_when(`Возраст` < quantile(`Возраст`, .25) ~ "Young", 
+                               between(`Возраст`, quantile(`Возраст`, .25), 
+                                                   quantile(`Возраст`, .75)) ~ "Average",
+                               `Возраст` > quantile(`Возраст`, .75) ~ "Old")) %>% 
+  mutate(across(where(is.numeric), function(x) (x - mean(x, na.rm=T))/(sd(x, na.rm = T))))
+  
+```
+
+### Rename
+
+```{r}
+data %>% 
+  rename(`Возрастная_Группа` = Age_Group, `Старшие` = Elderly)
+```
+
+
+
+
+
+
+
+
+
+
+
+
