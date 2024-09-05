@@ -85,8 +85,7 @@ head(data)
 
 ```{r}
 data %>% 
-  select(`Возраст`, function(x) any(str_detect(x, "Жен"))) %>% 
-  View()
+  select(`Возраст`, function(x) any(str_detect(x, "Жен")))
 ```
 
 ### Select
@@ -133,7 +132,48 @@ data %>%
   rename(`Возрастная_Группа` = Age_Group, `Старшие` = Elderly)
 ```
 
+### Sorting
 
+```{r}
+data %>% 
+  select(`Группа`, `Пол`, where(is.numeric)) %>% 
+  group_by(`Пол`) %>% 
+  arrange(desc(`Возраст`), .by_group = T) %>% 
+  summarize(across(where(is.numeric), function(x) mean(x, na.rm = T)))
+```
+
+```{r}
+stats <- list(
+  `_N_subjects` = ~length(.x) %>% as.character(),
+  `_N_entries` = ~sum(!is.na(.x)) %>% as.character(),
+  `_No_data` = ~sum(is.na(.x)) %>% as.character(),
+  `_Mean` = ~ifelse(sum(!is.na(.x)) == 0, "NA*", mean(.x, na.rm = T) 
+                  %>% round(2) 
+                  %>% as.character()),
+  `_Standard_Deviation` = ~ifelse(sum(!is.na(.x)) < 3, "NA*", sd(.x, na.rm = T) 
+                                %>% round(2) 
+                                %>% as.character()),
+  `_CI_for_Mean` = ~sd(.x, na.rm = T)
+                      %>% round(2) 
+                      %>% as.character(),
+  `_Min - Max` = ~ifelse(sum(!is.na(.x)) == 0, "NA*", paste0(min(.x, na.rm = T) %>% round(2), 
+                                                         " - ", max(.x, na.rm = T) %>% round(2))),
+  `_Q1 - Q3` = ~ifelse(sum(!is.na(.x)) == 0, "NA*", paste0(quantile(.x, .25, na.rm = T) %>% round(2), 
+                                                         " - ", quantile(.x, .75, na.rm = T) %>% round(2)))
+
+)
+
+data %>% 
+  select(`Группа`, where(is.numeric)) %>% 
+  group_by(`Группа`) %>% 
+  summarise(across(where(is.numeric), stats)) %>% 
+  pivot_longer(!`Группа`) %>% 
+  separate(name, into = c('Parameter', "Statistic"), sep="__") %>% 
+  rename(Value = value, Group = `Группа`) %>% 
+  flextable() %>% 
+  theme_box() %>% 
+  merge_v(c("Group", "Parameter"))
+```
 
 
 
