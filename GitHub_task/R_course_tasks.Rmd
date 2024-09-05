@@ -142,6 +142,8 @@ data %>%
   summarize(across(where(is.numeric), function(x) mean(x, na.rm = T)))
 ```
 
+# Flextable
+
 ```{r}
 stats <- list(
   `_N_subjects` = ~length(.x) %>% as.character(),
