@@ -1,0 +1,172 @@
+---
+title: "Task_4_notebook"
+author: "Dmitrii Belousov"
+date: "2024-10-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+```{r}
+true_p = .3
+n_patients = 100
+variance = true_p * (1 - true_p)
+print(variance)
+std = sqrt(variance)
+print(std)
+```
+```{r}
+cohort_outcomes <- rbernoulli(n_patients, true_p)
+print(mean(cohort_outcomes))
+```
+
+# Набираем статистику
+
+```{r}
+n_patients <- 700
+n_repeats <- 1000 
+
+df_all_repeats <- data.frame(
+  n_exp = rep(1:n_repeats, each = n_patients),
+  ID =  rep(1:n_patients, n_repeats),
+  P_01 = rbernoulli(n_patients*n_repeats, 0.01),
+  P_1 = rbernoulli(n_patients*n_repeats, 0.1),
+  P_3 = rbernoulli(n_patients*n_repeats, 0.3),
+  P_5 = rbernoulli(n_patients*n_repeats, 0.5),
+  P_7 = rbernoulli(n_patients*n_repeats, 0.7),
+  P_9 = rbernoulli(n_patients*n_repeats, 0.9),
+  P_99 = rbernoulli(n_patients*n_repeats, 0.99)
+)
+
+df_sample_mean <- df_all_repeats %>% 
+  pivot_longer(cols = starts_with("P_"), 
+               names_to = "Prob_Group",
+               values_to = "Outcome") %>% 
+  mutate(TRUE_PROBA = case_when(
+    Prob_Group == "P_01" ~ 0.01, 
+    Prob_Group == "P_1" ~ 0.1, 
+    Prob_Group == "P_3" ~ 0.3, 
+    Prob_Group == "P_5" ~ 0.5, 
+    Prob_Group == "P_7" ~ 0.7, 
+    Prob_Group == "P_9" ~ 0.9,
+    Prob_Group == "P_99" ~ 0.99
+  )) %>% 
+  group_by(n_exp, Prob_Group) %>% 
+  summarise(mean_Hg_upd = mean(TRUE_PROBA) - mean(Outcome), .groups = "drop") %>% 
+  ungroup()
+  
+  
+ggplot(df_sample_mean, aes(x = mean_Hg_upd, color=Prob_Group)) +
+  geom_density() +
+  xlab("Mean Difference") +
+  scale_color_manual(values = c("P_01" = "#FFC763", "P_1" = "#FF9779", "P_3" = "#FF7499", 
+                                "P_5" = "#7465BB", "P_7" = "#2A75C4", "P_9" = "#0088AA", "P_99" = "#00C89D"),
+                      labels = c("P_01" = "p=0.01", "P_1" = "p=0.1", "P_3" = "p=0.3", 
+                                "P_5" = "p=0.5", "P_7" = "p=0.7", "P_9" = "p=0.9", "P_99" = "p=0.99")) +
+  labs(color = "True Probability") +
+  theme_bw()  
+
+
+```
+Итак, мы можем заметить следующую зависимость, чем реже успех (или неудача), тем ниже дисперсия оценки вероятности события, которую мы получаем. Также мы можем увидеть эту зависимость на втором графике:
+```{r}
+df_sample_mean %>% 
+  group_by(Prob_Group) %>% 
+  summarize(std_cohort = sd(mean_Hg_upd)) %>% 
+  ungroup() %>% 
+  mutate(TRUE_PROBA = case_when(
+    Prob_Group == "P_01" ~ 0.01, 
+    Prob_Group == "P_1" ~ 0.1, 
+    Prob_Group == "P_3" ~ 0.3, 
+    Prob_Group == "P_5" ~ 0.5, 
+    Prob_Group == "P_7" ~ 0.7, 
+    Prob_Group == "P_9" ~ 0.9,
+    Prob_Group == "P_99" ~ 0.99
+  )) %>%
+  ggplot(aes(x = TRUE_PROBA, y = std_cohort)) +
+  geom_smooth(method = "loess", se = F, 
+              span = 0.7, color='grey50') +
+  geom_point(size=3) +
+  xlab("True Probability") +
+  ylab("Standard Deviation of Mean Difference") +
+  theme_bw()
+```
+Следовательно, чем ближе вероятность события к экстремальным значениям, тем ниже дисперсия оценки вероятности, и наоборот. 
+Также можно заметить, что, чем меньше выборка, тем больше распределение плотности вероятности оценок вероятностей близких экстремальным значениям сильно отличается от нормального, концентрируясь в определенных значениях, становится похожим на дискретное.
+```{r}
+n_patients <- 30
+n_repeats <- 1000 
+
+df_all_repeats <- data.frame(
+  n_exp = rep(1:n_repeats, each = n_patients),
+  ID =  rep(1:n_patients, n_repeats),
+  P_01 = rbernoulli(n_patients*n_repeats, 0.01),
+  P_1 = rbernoulli(n_patients*n_repeats, 0.1),
+  P_3 = rbernoulli(n_patients*n_repeats, 0.3),
+  P_5 = rbernoulli(n_patients*n_repeats, 0.5),
+  P_7 = rbernoulli(n_patients*n_repeats, 0.7),
+  P_9 = rbernoulli(n_patients*n_repeats, 0.9),
+  P_99 = rbernoulli(n_patients*n_repeats, 0.99)
+)
+
+df_sample_mean <- df_all_repeats %>% 
+  pivot_longer(cols = starts_with("P_"), 
+               names_to = "Prob_Group",
+               values_to = "Outcome") %>% 
+  mutate(TRUE_PROBA = case_when(
+    Prob_Group == "P_01" ~ 0.01, 
+    Prob_Group == "P_1" ~ 0.1, 
+    Prob_Group == "P_3" ~ 0.3, 
+    Prob_Group == "P_5" ~ 0.5, 
+    Prob_Group == "P_7" ~ 0.7, 
+    Prob_Group == "P_9" ~ 0.9,
+    Prob_Group == "P_99" ~ 0.99
+  )) %>% 
+  group_by(n_exp, Prob_Group) %>% 
+  summarise(mean_Hg_upd = mean(TRUE_PROBA) - mean(Outcome), .groups = "drop") %>% 
+  ungroup()
+  
+  
+ggplot(df_sample_mean, aes(x = mean_Hg_upd, color=Prob_Group)) +
+  geom_density() +
+  xlab("Mean Difference") +
+  scale_color_manual(values = c("P_01" = "#FFC763", "P_1" = "#FF9779", "P_3" = "#FF7499", 
+                                "P_5" = "#7465BB", "P_7" = "#2A75C4", "P_9" = "#0088AA", "P_99" = "#00C89D"),
+                      labels = c("P_01" = "p=0.01", "P_1" = "p=0.1", "P_3" = "p=0.3", 
+                                "P_5" = "p=0.5", "P_7" = "p=0.7", "P_9" = "p=0.9", "P_99" = "p=0.99")) +
+  labs(color = "True Probability") +
+  theme_bw()  
+```
+
+```{r}
+df_sample_mean %>% 
+  group_by(Prob_Group) %>% 
+  summarize(std_cohort = sd(mean_Hg_upd)) %>% 
+  ungroup() %>% 
+  mutate(TRUE_PROBA = case_when(
+    Prob_Group == "P_01" ~ 0.01, 
+    Prob_Group == "P_1" ~ 0.1, 
+    Prob_Group == "P_3" ~ 0.3, 
+    Prob_Group == "P_5" ~ 0.5, 
+    Prob_Group == "P_7" ~ 0.7, 
+    Prob_Group == "P_9" ~ 0.9,
+    Prob_Group == "P_99" ~ 0.99
+  )) %>%
+  ggplot(aes(x = TRUE_PROBA, y = std_cohort)) +
+  geom_smooth(method = "loess", se = F, 
+              span = 0.7, color='grey50') +
+  geom_point(size=3) +
+  xlab("True Probability") +
+  ylab("Standard Deviation of Mean Difference") +
+  theme_bw()
+```
+
+
+
+
+
+
+
