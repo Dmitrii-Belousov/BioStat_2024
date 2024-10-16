@@ -1,0 +1,473 @@
+---
+title: "automatization_notebook_02"
+output: word_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(summarytools)
+library(GGally)
+library(RColorBrewer)
+library(ggpubr)
+library(reshape2)
+library(pheatmap)
+```
+
+# Чтение данных
+
+В вашем варианте нужно использовать датасет food.
+
+```{r}
+read.csv("./data/raw/food.csv") -> food
+
+```
+
+# Выведите общее описание данных
+
+```{r}
+# I like this package better
+dfSummary(food)
+
+```
+
+# Очистка данных
+
+1)  Уберите переменные, в которых пропущенных значений больше 20% или уберите субъектов со слишком большим количеством пропущенных значений. Или совместите оба варианта. Напишите обоснование, почему вы выбрали тот или иной вариант:
+
+**Обоснование**:
+
+2)  Переименуйте переменные в человекочитаемый вид (что делать с пробелами в названиях?);
+
+3)  В соответствии с описанием данных приведите переменные к нужному типу (numeric или factor);
+
+4)  Отсортируйте данные по возрасту по убыванию; -> нет возраста, сортировка по углеводам;
+
+5)  Сохраните в файл outliers.csv субъектов, которые являются выбросами (например, по правилу трёх сигм) --- это необязательное задание со звёздочкой;
+
+6)  Отфильтруйте датасет так, чтобы остались только Rice и Cookie (переменная Category и есть группирующая);
+
+7)  Присвойте получившийся датасет переменной "cleaned_data".
+
+```{r}
+sum(is.na(food))
+```
+
+
+```{r, fig.height=12, fig.width=12}
+
+food %>% 
+  select(where(is.numeric) & (-matches("Nutrient"))) %>% 
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "value") %>% 
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = 10, fill = "skyblue", color = "black") +
+  facet_wrap(~variable, scales = "free_x") + 
+  theme_minimal() +
+  labs(title = "Histograms for each column")
+
+
+```
+
+```{r}
+
+# Фильтрация колонок, переименование переменных, обработка пробелов (точек)
+
+food %>%  
+  select(where(~ mean(. == 0) <= 0.2)) %>% 
+  filter(!if_all(starts_with("Data."), ~ . == 0)) %>% 
+  mutate(across(starts_with("Data."), ~ as.numeric(.x))) %>% 
+  rename_with(~ gsub("Data.", "", .) %>% 
+                gsub("\\.", "_", .) %>% 
+                 gsub("Fat_", "Fat__", .) %>% 
+                gsub("___RAE", "", .) %>% 
+                gsub("Major_Minerals_", "Minerals__", .) %>% 
+                gsub("Vitamins_", "Vitamins__", .), everything()) %>% 
+  mutate(Category = as.factor(Category)) %>% 
+  arrange(Carbohydrate)-> interim_food
+  
+```
+
+
+
+```{r}
+interim_food %>% 
+  select(where(is.numeric) & (-Nutrient_Bank_Number)) %>% 
+  summarize(across(everything(), sd) * 3 + across(everything(), mean)) -> upper_bound
+
+interim_food %>% 
+  select(where(is.numeric) & (-Nutrient_Bank_Number)) %>% 
+  summarize(across(everything(), mean) - across(everything(), sd) * 3) -> lower_bound
+
+outliers_list = c()
+for (column in colnames(lower_bound)) {
+  outliers_list = c(interim_food[!between(interim_food[[column]], 
+                                          lower_bound[[column]], 
+                                          upper_bound[[column]]),]$Nutrient_Bank_Number, 
+                    outliers_list)
+}
+
+outliers_list <- unique(outliers_list)
+
+interim_food %>% 
+  filter(Nutrient_Bank_Number %in% outliers_list) %>% 
+  write.csv2(file = "outliers.csv")
+```
+
+```{r}
+cleaned_data <- interim_food %>% 
+  filter(Category %in% c("Rice", "Cookie") & !(Nutrient_Bank_Number %in% outliers_list))
+```
+
+
+
+# Сколько осталось переменных?
+
+```{r}
+
+length(cleaned_data)
+
+```
+
+# Сколько осталось случаев?
+
+```{r}
+
+dim(cleaned_data)[1]
+
+```
+
+# Есть ли в данных идентичные строки?
+
+```{r}
+
+sum(duplicated(cleaned_data)) # Nope
+
+```
+
+# Сколько всего переменных с пропущенными значениями в данных и сколько пропущенных точек в каждой такой переменной?
+
+```{r}
+
+sum(is.na(cleaned_data)) # None
+
+```
+
+# Описательные статистики
+
+## Количественные переменные
+
+1)  Рассчитайте для всех количественных переменных для каждой группы (Category):
+
+1.1) Количество значений;
+
+1.2) Количество пропущенных значений;
+
+1.3) Среднее;
+
+1.4) Медиану;
+
+1.5) Стандартное отклонение;
+
+1.6) 25% квантиль и 75% квантиль;
+
+1.7) Интерквартильный размах;
+
+1.8) Минимум;
+
+1.9) Максимум;
+
+1.10) 95% ДИ для среднего - задание со звёздочкой.
+
+```{r}
+
+cleaned_data %>% 
+  select(where(is.numeric) & (-Nutrient_Bank_Number)) %>% 
+  psych::describe(quant=c(.25,.75), IQR=T) %>% 
+  mutate(CI_95_upper = mean + 1.96 * se,
+         CI_95_lower = mean - 1.96 * se)
+
+```
+
+
+
+## Категориальные переменные
+
+1)  Рассчитайте для всех категориальных переменных для каждой группы (Category):
+
+1.1) Абсолютное количество;
+
+1.2) Относительное количество внутри группы;
+
+1.3) 95% ДИ для доли внутри группы - задание со звёздочкой.
+
+```{r}
+
+cleaned_data %>% 
+  count(Category) %>% 
+  arrange(desc(n)) %>% 
+  mutate(Fraction = n / sum(n), 
+         CI_upper = sapply(n, function(successes) {
+           prop.test(successes, sum(n), conf.level = 0.95)$conf.int[2]
+         }),
+         CI_lower = sapply(n, function(successes) {
+           prop.test(successes, sum(n), conf.level = 0.95)$conf.int[1]
+         }))
+
+```
+
+# Визуализация
+
+## Количественные переменные
+
+1)  Для каждой количественной переменной сделайте боксплоты по группам. Расположите их либо на отдельных рисунках, либо на одном, но читаемо;
+
+2)  Наложите на боксплоты beeplots - задание со звёздочкой.
+
+3)  Раскрасьте боксплоты с помощью библиотеки RColorBrewer.
+
+```{r, fig.height=8}
+display.brewer.all()
+```
+
+
+```{r, fig.height=12, fig.width=12}
+
+cleaned_data %>% 
+  rename_with(~ gsub("Data.", "", .) %>% 
+                gsub("\\.", "_", .) %>% 
+                 gsub("Fat__", "", .) %>% 
+                gsub("Minerals__", "", .) %>% 
+                gsub("Vitamin_A_", "Vitamin_A", .) %>% 
+                gsub("Vitamins__", "", .), everything()) %>% 
+  pivot_longer(names_to = "Parameter", 
+               values_to = "Value", 
+               cols = (where(is.numeric) & (!matches("Nutrient")))) %>% 
+  ggplot(aes(x = Category, y = Value, fill = Category)) +
+  geom_boxplot() +
+  
+  facet_wrap(~Parameter, scales = "free_y") +
+  geom_jitter(shape=21, color='black', width=0.1) +
+  scale_fill_manual(values = brewer.pal(n = 3, name = "Set2")) +
+  theme_bw()
+
+```
+
+## Категориальные переменные
+
+1)  Сделайте подходящие визуализации категориальных переменных. Обоснуйте, почему выбрали именно этот тип.
+
+Выбрал этот тип, потому что мне кажется, что донат плот будет смотреться лучше чем барплот в этой ситуации.
+
+```{r}
+
+data_for_pie <- cleaned_data %>% 
+  count(Category) %>% 
+  mutate(Fraction = n / sum(n))
+
+data_for_pie$ymax <- cumsum(data_for_pie$Fraction)
+data_for_pie$ymin <- c(0, head(data_for_pie$ymax, n = -1))
+data_for_pie$label <- paste0(data_for_pie$Category, "\n", data_for_pie$n, "(", round(data_for_pie$Fraction * 100, 2), "%)")
+data_for_pie$label_position <- (data_for_pie$ymin + data_for_pie$ymax) / 2
+
+ggplot(data_for_pie, aes(ymax = ymax, ymin = ymin, xmax = 4, xmin = 3, fill = Category)) +
+  geom_rect(color = "black", size = 0.5) +
+  coord_polar(theta = "y") + 
+  xlim(c(2, 5)) +   
+  geom_text(aes(x = 4.8, y = label_position, label = label), 
+            size = 4, color = "black") +
+  theme_void() +             
+  theme(legend.position = "right") + 
+  scale_fill_brewer(palette = "Set3")
+```
+
+# Статистические оценки
+
+## Проверка на нормальность
+
+1)  Оцените каждую переменную на соответствие нормальному распределению с помощью теста Шапиро-Уилка. Какие из переменных являются нормальными и как как вы это поняли?
+
+В печеньках углеводы, жиры и натрий распределены нормально, т.к. р значение больше 0.05 и мы не можем отвергнуть нулевую гипотезу теста о нормальности распределения.
+
+```{r}
+
+cleaned_data %>% 
+  group_by(Category) %>% 
+  summarize(across(where(is.numeric) & (!matches("Nutrient")), ~ round(shapiro.test(.x)$p.value, 3))) %>% 
+  t()
+
+```
+
+2)  Постройте для каждой количественной переменной QQ-плот. Отличаются ли выводы от теста Шапиро-Уилка? Какой метод вы бы предпочли и почему?
+
+```{r, fig.height=12, fig.width=12}
+
+cleaned_data %>% 
+  rename_with(~ gsub("Data.", "", .) %>% 
+                gsub("\\.", "_", .) %>% 
+                 gsub("Fat__", "", .) %>% 
+                gsub("Minerals__", "", .) %>% 
+                gsub("Vitamin_A_", "Vitamin_A", .) %>% 
+                gsub("Vitamins__", "", .), everything()) %>% 
+  pivot_longer(names_to = "Parameter", 
+               values_to = "Value", 
+               cols = (where(is.numeric) & (!matches("Nutrient")))) %>% 
+  ggplot(aes(sample = Value, fill=Category, color=Category)) +
+  stat_qq(shape=21, alpha=0.5, color='black') +
+  stat_qq_line() +
+  facet_wrap(~Parameter, scales = "free_y") +
+  scale_fill_manual(values = brewer.pal(n = 3, name = "Set2")) +
+  scale_color_manual(values = brewer.pal(n = 3, name = "Set2")) +
+  theme_bw()
+
+```
+
+В целом, по QQ плотам я бы сказал, что более-менее нормально распределены только углеводы. 
+Базово, я бы использовал QQ плот и гистограммы как главную проверку на нормальность, тест Шапиро-Вилка как второстепенный.
+
+3)  Ниже напишите, какие ещё методы проверки на нормальность вы знаете и какие у них есть ограничения.
+
+Знаю, что вот те, что я перечислил выше - основные. С гистограммой главное ограничение как и с QQ плотом - субъективность суждения, нельзя стандартизовать оценку графика. В гугле есть еще другие тесты, но я не хочу их писать, потому что никогда ими не пользовался.
+
+## Сравнение групп
+
+1)  Сравните группы (переменная **Category**) по каждой переменной (как количественной, так и категориальной). Для каждой переменной выберите нужный критерий и кратко обоснуйте его выбор в комментариях.
+К сожалению, в этом датасете нет других категориальных переменных :( Для попарных сравнений я выбрал критерий Манна-Уитни, так как данные не распределены нормально.
+
+```{r, fig.height=12, fig.width=12}
+
+cleaned_data %>% 
+  rename_with(~ gsub("Data.", "", .) %>% 
+                gsub("\\.", "_", .) %>% 
+                 gsub("Fat__", "", .) %>% 
+                gsub("Minerals__", "", .) %>% 
+                gsub("Vitamin_A_", "Vitamin_A", .) %>% 
+                gsub("Vitamins__", "", .), everything()) %>% 
+  pivot_longer(names_to = "Parameter", 
+               values_to = "Value", 
+               cols = (where(is.numeric) & (!matches("Nutrient")))) %>% 
+  ggplot(aes(x = Category, y = Value, fill = Category)) +
+  geom_boxplot() +
+  
+  facet_wrap(~Parameter, scales = "free_y") +
+  geom_jitter(shape=21, color='black', width=0.1) +
+  scale_fill_manual(values = brewer.pal(n = 3, name = "Set2")) +
+  stat_compare_means(method = "wilcox.test", label = "p.signif", 
+                     comparisons = list(c("Cookie", "Rice")), 
+                     vjust=0.6) +
+  theme_bw()
+
+```
+
+# Далее идут **необязательные** дополнительные задания, которые могут принести вам дополнительные баллы в том числе в случае ошибок в предыдущих
+
+## Корреляционный анализ
+
+1)  Создайте корреляционную матрицу с визуализацией и поправкой на множественные сравнения. Объясните, когда лучше использовать корреляционные матрицы и в чём минусы и плюсы корреляционных исследований.
+
+Корреляционные матрицы лучше всего использовать, когда мы хотим найти какую-то структуру в ассоциациях среди наших данных, вероятно какие либо осмысленные кластера. В качестве плюсов можно вынести то, что это действительно помогает найти структуру в наших данных, среди минусов можно вынести то, что без поправок на множественные сравнения мы рискуем увеличить ошибку первого рода, а применяя поправки на множественные сравнения мы снижаем мощность анализа. 
+
+```{r, fig.height=12, fig.width=13}
+
+cleaned_data <- cleaned_data %>% 
+  rename_with(~ gsub("Data.", "", .) %>% 
+                gsub("\\.", "_", .) %>% 
+                 gsub("Fat__", "", .) %>% 
+                gsub("Minerals__", "", .) %>% 
+                gsub("Vitamin_A_", "Vitamin_A", .) %>% 
+                gsub("Vitamins__", "", .), everything()) %>% 
+  select(where(is.numeric) & (-matches("Nutrient"))) %>% 
+  rename_with(~ gsub("_", " ", .), everything())
+
+rhos <- cor(cleaned_data, method = "spearman")
+p_values <- psych::corr.test(cleaned_data, method="spearman", adjust="BH")$p
+
+dendro <- as.dendrogram(hclust(dist(rhos)))
+ordered_cor_matrix <- rhos[order.dendrogram(dendro), order.dendrogram(dendro)]
+ordered_p_values <- p_values[order.dendrogram(dendro), order.dendrogram(dendro)]
+
+cor_melted <- melt(ordered_cor_matrix)
+p_melted <- melt(ordered_p_values)
+
+cor_plot_data <- merge(cor_melted, p_melted, by = c("Var1", "Var2"))
+colnames(cor_plot_data) <- c("Var1", "Var2", "Correlation", "Adjusted_P")
+
+ggplot(cor_plot_data, aes(Var1, Var2)) +
+  geom_tile(aes(fill = Correlation), color = "white") +
+  scale_fill_gradient2(low = "#433CE1", high = "#E13C59", mid = "grey90", 
+                       midpoint = 0, limit = c(-1, 1), name = "Correlation") +
+  geom_text(aes(label = ifelse(Adjusted_P < 0.05, sprintf("%.2f", Adjusted_P), "")), 
+             color = "black", size = 4) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "", y = "")
+
+```
+
+## Моделирование
+
+1)  Постройте регрессионную модель для переменной **Category**. Опишите процесс построения
+Допустим, мы хотим протестировать гипотезу связь категории и металлами
+```{r}
+minearal_data <- cleaned_data %>% 
+  rename_with(~ gsub("Data.", "", .) %>% 
+                gsub("\\.", "_", .) %>% 
+                 gsub("Fat__", "", .) %>% 
+                gsub("Minerals__", "", .) %>% 
+                gsub("Vitamin_A_", "Vitamin_A", .) %>% 
+                gsub("Vitamins__", "", .), everything()) %>% 
+  select(Category, Copper, Iron, Magnesium, Zinc) %>% 
+  
+cleaned_data$Category <- as.factor(as.character(cleaned_data$Category))
+lm1 <- glm(Category ~ Copper + Iron + Magnesium + Zinc, family = binomial, data = cleaned_data)
+summary(lm1)
+
+```
+Магний можно выкинуть из-за несколько высокого VIF
+```{r}
+car::vif(update(lm1, . ~ .))
+```
+
+Попробуем построить модель со взаимодействиями:
+```{r}
+lm_full <- glm(Category ~ Copper + Iron + Zinc + Copper:Iron + 
+                 Copper:Zinc  + Iron:Zinc, 
+               family = binomial, data = cleaned_data)
+summary(lm_full)
+```
+Сравним модели со взаимодействиями и без них:
+```{r}
+lm_11 <- update(lm_full, . ~ . - Copper:Iron)
+lm_12 <- update(lm_full, . ~ . - Copper:Zinc)
+lm_13 <- update(lm_full, . ~ . - Iron:Zinc)
+
+anova(lm_11, lm_12, lm_13, lm_full, test = "LRT")
+```
+
+```{r}
+AIC(lm_full, lm_11, lm_12, lm_13)
+```
+
+Выбираем лучшую модель и продолжаем:
+```{r}
+lm_111 <- update(lm_11, . ~ . - Copper:Zinc)
+lm_112 <- update(lm_11, . ~ . - Iron:Zinc)
+
+anova(lm_111, lm_112, lm_11, test = "LRT")
+```
+```{r}
+AIC(lm_11, lm_111, lm_112)
+```
+
+
+```{r}
+summary(lm_11)
+```
+Далее можно продолжать регрессионный анализ, валидацию модели и интерпретацию результатов.
+
+
+
+
+
+
