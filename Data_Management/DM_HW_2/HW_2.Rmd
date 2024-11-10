@@ -1,0 +1,89 @@
+---
+title: "ADMH Assembly Routine"
+author: "Dmitrii Belousov"
+date: "2024-11-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(readxl)
+library(openxlsx)
+```
+
+# Data import
+
+```{r}
+mh_data <- read.xlsx("../ADaM coding_new/SDTM/MH_MEDICALHISTORY.xlsx")
+adsl <- read.xlsx("../ADaM coding_new/ADaM-like/ADSL.xlsx")
+```
+
+# Assembly procedure
+
+```{r}
+adsl_derived_data <- adsl %>% 
+  select(SUBJID, STUDYID, USUBJID, TRTP, TRTPN) %>% 
+  mutate(across(c(STUDYID, USUBJID, TRTP), as.character),
+         TRTPN = as.integer(TRTPN))
+```
+
+
+```{r}
+mh_derived <- mh_data %>% 
+  filter(MHCAT == "Medical History", !is.na(MHTERM)) %>% 
+  select(SUBJID, MHCAT, MHSEQ, MHTERM, MHDECOD, MHBODSYS, MHSTDTC, MHENDTC, MHENRTPT) %>% 
+  mutate(
+    across(c(MHCAT, MHTERM, MHSEQ, MHDECOD, MHBODSYS, MHENRTPT), as.character),
+    MHSEQ = as.integer(MHSEQ),
+    
+    MHENRF = if_else(MHENRTPT == "ONGOING", "ONGOING", NA),
+    MHENDTC = as.Date(MHENDTC, format = "%Y-%m-%d"),
+    AENDT = case_when(MHENRTPT == "ONGOING" ~ "ONGOING", 
+                      TRUE ~ as.character(MHENDTC)),
+    
+    ASTDTF = case_when(
+      grepl("^\\d{4}-\\d{2}-\\d{2}$", MHSTDTC) ~ NA,
+      grepl("^\\d{4}-\\d{2}", MHSTDTC) ~ "D",
+      grepl("^\\d{4}", MHSTDTC) ~ "M",
+      TRUE ~ "Y"
+         ),
+    ASTDT = case_when(
+          grepl("^\\d{4}-\\d{2}-\\d{2}$", MHSTDTC) ~ MHSTDTC,
+          grepl("^\\d{4}-\\d{2}", MHSTDTC) ~ paste0(MHSTDTC, "-01"),
+          grepl("^\\d{4}", MHSTDTC) ~ paste0(MHSTDTC, "-01-01"),
+          TRUE ~ MHSTDTC
+        ),
+    
+    
+    ASTDT = as.Date(ASTDT, format = "%Y-%m-%d"),
+
+    AENDTF = case_when(
+      grepl("^\\d{4}-\\d{2}-\\d{2}$", MHENDTC) ~ NA,
+      grepl("^\\d{4}-\\d{2}", MHENDTC) ~ "D",
+      grepl("^\\d{4}", MHENDTC) ~ "M",
+      TRUE ~ "Y"
+         )
+  )
+```
+
+
+
+
+```{r}
+merge(adsl_derived_data, mh_derived, by = "SUBJID", all = TRUE) %>% 
+  select(STUDYID, USUBJID, TRTP, TRTPN, MHSEQ , MHCAT,
+         MHTERM , MHDECOD , MHBODSYS, MHSTDTC, ASTDT, 
+         ASTDTF, MHENDTC, AENDT, AENDTF, MHENRTPT, MHENRF) %>% 
+  write.xlsx("../ADaM coding_new/ADaM-like/ADMH.xlsx")
+```
+
+
+
+
+
+
+
+
+
+
