@@ -1,0 +1,13 @@
+---
+title: "HW_1"
+author: "Dmitrii Belousov"
+date: "2024-11-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+
+```
+
