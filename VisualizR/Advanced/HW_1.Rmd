@@ -3,11 +3,429 @@ title: "HW_1"
 author: "Dmitrii Belousov"
 date: "2024-11-16"
 output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
-
+library(summarytools)
+library(rstatix)
+library(GGally)
+library(factoextra)
+library(ggpubr)
+library(ggbiplot)
+library(plotly)
+library(tidymodels)
+library(embed)
 ```
+
+# Data Import
+
+```{r}
+data <- readRDS("very_low_birthweight.RDS")
+```
+
+# Task 1
+
+Загрузите датасет very_low_birthweight.RDS (лежит в папке домашнего
+задания). Это данные о 671 младенце с очень низкой массой тела (\<1600
+грамм), собранные в Duke University Medical Center доктором Майклом О'Ши
+c 1981 по 1987 г.\
+Описание переменных см. здесь. Переменными исхода являются колонки
+'dead', а также время от рождения до смерти или выписки (выводятся из
+'birth' и 'exit' 7 пациентов были выписаны до рождения). Сделайте копию
+датасета, в которой удалите колонки с количеством пропусков больше 100,
+а затем удалите все строки с пропусками.
+
+```{r}
+data %>% 
+  head()
+```
+
+```{r}
+cols_to_select <- data.frame(NA_count = colSums(is.na(data))) %>% filter(NA_count <= 100) %>% row.names()
+
+data %>% 
+  select(all_of(cols_to_select)) %>% 
+  na.omit() %>% 
+  write_csv("filtered_dataset.csv")
+```
+
+# Task 2
+
+Постройте графики плотности распределения для числовых переменных.
+Удалите выбросы, если таковые имеются. Преобразуйте категориальные
+переменные в факторы. Для любых двух числовых переменных раскрасьте
+график по переменной 'inout'.
+
+```{r, fig.height=7, fig.width=9, fig.dpi=200}
+data <- data %>% 
+  mutate(across(where(is.character), as.numeric), 
+         across(where(is.factor), as.factor),
+         across(where(~ is.numeric(.) & n_distinct(., na.rm = TRUE) == 2), as.factor))
+
+data %>% 
+  select_if(is.numeric) %>% 
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "value") %>% 
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = 10, fill = "skyblue", color = "black") +
+  facet_wrap(~variable, scales = "free_x") + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(size=7))
+```
+
+```{r}
+dfSummary(data)
+```
+
+Что-то странное происходит в *hospstay*, предполагаю, что младенцы не
+умеют путешествовать во времени. В этих (*exit, pltct, lol*) переменных
+так же есть экстремальные значения, природа которых мне неизвестна,
+поэтому удалю их по правилу трех IQR.
+
+NB: после удаления аутлаеров по *hospstay* исчезли аутлаеры у *exit*
+
+```{r}
+data <- data %>% 
+  mutate(ID = c(1:nrow(data))) %>% 
+  select(ID, everything()) 
+  
+```
+
+```{r}
+data <- data %>% 
+  filter(hospstay > 0 | is.na(hospstay), 
+         hospstay < 3 * IQR(hospstay, na.rm = T) | is.na(hospstay),
+         pltct < 3 * IQR(pltct, na.rm = T) | is.na(pltct),
+         lol < 3 * IQR(lol, na.rm = T) | is.na(lol))
+data %>% 
+  dfSummary()
+```
+
+
+
+
+
+
+
+
+
+
+```{r, fig.height=7, fig.width=9, fig.dpi=200}
+data %>% 
+  select_if(is.numeric) %>% 
+  select(-ID) %>% 
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "value") %>% 
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = 10, fill = "skyblue", color = "black") +
+  facet_wrap(~variable, scales = "free_x") + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(size=7))
+```
+
+Теперь выглядит приятнее :)
+
+# Task 3
+
+Проведите тест на сравнение значений колонки 'lowph' между группами в
+переменной inout. Вид статистического теста определите самостоятельно.
+Визуализируйте результат через библиотеку 'rstatix'. Как бы вы
+интерпретировали результат, если бы знали, что более низкое значение
+lowph ассоциировано с более низкой выживаемостью?
+
+```{r}
+data %>% group_by(inout) %>% select(inout, lowph) %>% dfSummary()
+```
+
+```{r}
+data %>% 
+  t_test(lowph ~ inout, detailed = T)
+```
+
+У транспортированных пациентов значение рН меньше, чем у рожденных в
+Дюке (MD=0.088, CI 95%: [0.055; 0.122], p \< $10^{-6}$). Поскольку мы
+знаем, что более низкое значение рН ассоциировано с более высокой
+смертностью, можно предположить, что транспортировка пациентов может
+быть также связана с более высокой смертностью.
+
+# Task 4
+
+Сделайте новый датафрейм, в котором оставьте только континуальные или ранговые 
+данные, кроме 'birth', 'year' и 'exit'. Сделайте корреляционный анализ этих 
+данных. Постройте два любых типа графиков для визуализации корреляций.
+
+```{r, fig.height=6, fig.width=7, figure.dpi=200}
+corr_data <- data %>% 
+  select(where(is.numeric), -c(ID, birth, year, exit)) %>% 
+  psych::corr.test(method = "spearman", adjust="BH")
+
+cor_melted <- reshape2::melt(corr_data$r)
+p_melted <- reshape2::melt(corr_data$p)
+
+cor_plot_data <- merge(cor_melted, p_melted, by = c("Var1", "Var2"))
+colnames(cor_plot_data) <- c("Var1", "Var2", "Correlation", "Adjusted_P")
+
+ggplot(cor_plot_data, aes(Var1, Var2)) +
+  geom_tile(aes(fill = Correlation), color = "white") +
+  scale_fill_gradient2(low = "#433CE1", high = "#E13C59", mid = "grey90", 
+                       midpoint = 0, limit = c(-1, 1), name = "Correlation") +
+  geom_text(aes(label = ifelse(Adjusted_P < 0.05, sprintf("%.2f", Adjusted_P), "")), 
+             color = "black", size = 4) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12), 
+        axis.text.y = element_text(size = 12)) +
+  labs(x = "", y = "")
+```
+
+```{r, message=FALSE, warning=FALSE, fig.dpi=150, fig.width=10, fig.height=10}
+data %>% 
+  select(where(is.numeric), -c(ID, birth, year, exit)) %>%
+  ggpairs(progress = FALSE) +
+  theme_bw() +
+  theme(axis.text = element_text(size=6))
+```
+
+# Task 5
+
+Постройте иерархическую кластеризацию на этом датафрейме.
+
+```{r, }
+rownames(data) <- data$ID
+
+res <- data %>% 
+  select(where(is.numeric), -c(ID, birth, year, exit)) %>%
+  na.omit() %>% 
+  scale() %>% 
+  dist(method = "euclidean") %>% 
+  hclust(method = "ward.D2") 
+res %>% 
+  fviz_dend(cex = 0.2, 
+            k = 3, 
+            k_colors = "jco")
+```
+
+# Task 6
+
+Сделайте одновременный график heatmap и иерархической кластеризации. 
+Интерпретируйте результат.
+
+```{r, fig.height=8, fig.width=4, figure.dpi=200}
+data %>% 
+  select(where(is.numeric), -c(ID, birth, year, exit)) %>%
+  na.omit() %>% 
+  scale() %>% 
+  pheatmap::pheatmap(color=colorRampPalette(c("#433CE1", "grey90", "#E13C59"))(50), 
+                     fontsize_row = 0.00001, fontsize_col = 7, angle_col = 0)
+```
+
+```{r}
+data %>% 
+  select(where(is.numeric), -c(ID, birth, year, exit)) %>%
+  na.omit() %>% 
+  scale() %>% 
+  pheatmap::pheatmap(color=colorRampPalette(c("#433CE1", "grey90", "#E13C59"))(50), 
+                     fontsize_row = 0.00001, fontsize_col = 7, angle_col = 0, kmeans_k=4)
+```
+
+Визульно, можно выделить на хитмапе 1 4 кластера, чтобы их проинтерпретировать, 
+можно усреднить значения в кластере, как на хитмапе 2. Первые 2 кластера довольно
+сильно похожи друг на друга, за исключением того, что пациенты из 1 кластера имели
+более выскойи уровень тромбоцитов и скор APG в отличие от пациентов из кластера 1.
+Пациенты из кластера 3 в отличие от остальных имеют наиболее длительный срок 
+нахождения в больнице. Отличительными чертами пациентов из кластера 4 является 
+самый низкий уровень рН, масса тела при рождении, а также минимальные сроки 
+беременности.
+
+# Task 7 & 8
+
+Проведите PCA анализ на этих данных. Проинтерпретируйте результат. Нужно ли 
+применять шкалирование для этих данных перед проведением PCA?
+
+Постройте biplot график для PCA. Раскрасьте его по значению колонки 'dead'.
+
+```{r}
+pca.data <- data %>% 
+  select(where(is.numeric), -c(ID, birth, year, exit)) %>%
+  na.omit() %>% 
+  scale() %>% 
+  prcomp()
+
+fviz_eig(pca.data, 
+         addlabels = T, 
+         ylim = c(0, 50))
+```
+
+В нашем случае необходимо проводить шкалирование данных, так как все переменные 
+имеют разные единицы измерения и разный размах. 
+Первые две компоненты довольно хорошо объясняют данные, объясняя около 55% вариабельности.
+```{r}
+pca.data$x %>% 
+  ggplot() +
+  geom_point(aes(x = PC1, y = PC2)) +
+  theme_bw()
+```
+
+Вклад каждой переменной в компоненту:
+```{r, fig.height=6, fig.width=7, figure.dpi=200}
+pcs <- reshape2::melt(pca.data$rotation)
+
+
+ggplot(pcs, aes(Var1, Var2)) +
+  geom_tile(aes(fill = value), color = "white") +
+  scale_fill_gradient2(low = "#433CE1", high = "#E13C59", mid = "grey90", 
+                       midpoint = 0, limit = c(-1, 1)) +
+  geom_text(aes(label = sprintf("%.2f", value)), 
+             color = "black", size = 4) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12), 
+        axis.text.y = element_text(size = 12)) +
+  labs(x = "", y = "")
+```
+В первую компоненту основной положительный вклад имеет время, проведенное в 
+госпитале, и негативная масса тела при рождении и время беременности (что похоже 
+на последний кластер в анализе выше).
+
+Во вторую компоненту основной вклад вносит продолжительность родов. В третий 
+уровень тромбоцитов и APG скор в большей степени и в меньшей степени 
+продолжительность нахождения в больнице.
+
+```{r}
+
+deaths <- data %>% filter(ID %in% rownames(pca.data$x)) %>% select(dead)
+
+levels(deaths$dead) <- c("Alive", "Dead")
+
+ggbiplot(pca.data, choices=1:2,
+         scale=1, alpha = 0.5, groups = as.factor(deaths$dead)) + 
+  theme_bw()
+```
+
+# Task 9
+
+Переведите последний график в 'plotly'. При наведении на точку нужно, чтобы 
+отображалось id пациента.
+
+```{r}
+explained_variance <- pca.data$sdev
+explained_variance_pct <- round(100 * explained_variance ** 2 / sum(explained_variance ** 2), 2)
+comp <- pca.data$rotation
+loadings <- comp
+for (i in seq(explained_variance)){
+  loadings[,i] <- comp[,i] * explained_variance[i]
+}
+
+features <- rownames(pca.data$rotation)
+
+fig <- plot_ly(
+  data = as.data.frame(pca.data$x), x = ~PC1, y = ~PC2,
+  text = ~paste("ID: ", rownames(pca.data$x)),
+  color = ~as.factor(deaths$dead),
+  colors = c('#636EFA','#EF553B'), 
+  type = 'scatter', 
+  mode = 'markers') %>%
+  layout(
+    legend=list(title=list(text='color')),
+    plot_bgcolor = "#e5ecf6",
+    xaxis = list(
+      title = sprintf("standardized PC1 (%.2f%% explained var.)", explained_variance_pct[1])),
+    yaxis = list(
+      title = sprintf("standardized PC2 (%.2f%% explained var.)", explained_variance_pct[2])))
+
+for (i in seq(length(features))){
+  fig <- fig %>%
+    add_segments(x = 0, 
+                 xend = loadings[i, 1], 
+                 y = 0, 
+                 yend = loadings[i, 2], 
+                 line = list(color = 'black'),
+                 inherit = FALSE, 
+                 showlegend = FALSE) %>%
+    add_annotations(x=loadings[i, 1], 
+                    y=loadings[i, 2], 
+                    ax = 0, 
+                    ay = 0,
+                    text = features[i], 
+                    xanchor = 'center', 
+                    yanchor= 'bottom')
+
+}
+fig
+```
+
+
+# Task 10
+
+Дайте содержательную интерпретацию PCA анализу. Почему использовать колонку 
+'dead' для выводов об ассоциации с выживаемостью некорректно? 
+
+To be done
+
+# Task 11
+
+Приведите ваши данные к размерности в две колонки через UMAP. Сравните 
+результаты отображения точек между алгоритмами PCA и UMAP
+
+```{r}
+umap_comps <- data %>% 
+  select(where(is.numeric), -c(ID, birth, year, exit)) %>%
+  na.omit() %>% 
+  recipe(~.) %>% 
+  step_normalize(all_predictors()) %>%
+  step_umap(all_predictors()) %>% 
+  prep() %>% 
+  juice()
+
+combined_data <- cbind(umap_comps, pca.data$x[,1:2], deaths)
+```
+
+
+```{r, fig.width=11, fig.height=5}
+umap_plot <- combined_data %>%
+  ggplot(aes(UMAP1, UMAP2)) +
+  geom_point(aes(color = as.character(dead)), 
+             alpha = 0.7, size = 2) +
+  labs(color = NULL) +
+  theme_bw()
+
+pca_plot <- combined_data %>%
+  ggplot(aes(PC1, PC2)) +
+  geom_point(aes(color = as.character(dead)), 
+             alpha = 0.7, size = 2) +
+  labs(color = NULL) +
+  theme_bw()
+
+ggarrange(
+  pca_plot, umap_plot, 
+  nrow = 1, ncol = 2,
+  widths = c(1, 1)
+)
+```
+В целом, результаты получились похожими, хотя умершие субъекты лучше 
+"кластеризуются" в UMAP.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
