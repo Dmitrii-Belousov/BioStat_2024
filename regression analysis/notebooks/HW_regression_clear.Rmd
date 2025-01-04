@@ -1,0 +1,538 @@
+---
+title: "HW_regression_clear"
+author: "Dmitrii Belousov"
+date: "2025-01-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(gtsummary)
+library(modelsummary)
+library(GGally)
+library(broom)
+library(ggfortify)
+library(ggResidpanel)
+library(performance)
+library(lmtest)
+library(sandwich)
+library(emmeans)
+library(gt)
+```
+
+```{r, include=FALSE}
+setwd("~/BioStat_2024/regression analysis/notebooks/")
+data <- readxl::read_xlsx("../data/HW_data.xlsx")
+```
+
+# Оценка физической активности
+
+Согласно описанию, мы можем предположить, что следующие переменные могут быть
+косвенно связаны с уровнем физической активности:
+
+  - **DRQSDT8** - Weight gain/Muscle building diet. <br> 
+  - **DRQSDT10** - High protein diet. <br> 
+  - **PAQ605** - Vigorous work activity. <br>
+  - **PAQ610** - Number of days vigorous work. <br>
+  - **PAD615** - Minutes vigorous-intensity work.  <br>
+  - **PAQ635** - Walk or bicycle. <br>
+  - **PAQ640** - Number of days walk or bicycle. <br>
+  - **PAD645** - Minutes walk/bicycle for transportation. <br>
+  - **PAQ650** - Vigorous recreational activities. <br>
+  - **PAQ655** - Days vigorous recreational activities. <br>
+  - **PAD660** - Minutes vigorous recreational activities. <br>
+  
+Характеристики когорты по параметрам физической активности:
+```{r, echo=FALSE}
+new_names <- c(
+  "Weight.gain.diet", "High.protein.diet", "Vigorous.work",
+  "Vigorous.work.days", "Vigorous.work.min", "Walk.bicycle",
+  "Walk.bicycle.days", "Walk.bicycle.min", "Vigorous.recr",
+  "Vigorous.recr.days", "Vigorous.recr.min"
+)
+
+data %>% 
+  select(
+    DRQSDT8, DRQSDT10, PAQ605, PAQ610, PAD615, PAQ635,
+    PAQ640, PAD645, PAQ650, PAQ655, PAD660
+  ) %>% 
+  rename_with(~ new_names) %>% 
+  tbl_summary(
+    type = list(all_continuous() ~ "continuous2"),
+  statistic = list(
+    all_continuous() ~ c("{mean} ({sd})", "{median} ({p25}-{p75})", "{min}-{max}")
+  )) %>%
+  modify_footnote(everything() ~ NA) %>%
+  bold_labels()
+```
+
+В качестве параметра физической активности я собираюсь использовать сумму трех количественных переменных: 
+`Vigorous.work.min`, `Walk.bicycle.min`, `Vigorous.recr.min`, `Moderate.work.act`, `Moderate.recr.act`. 
+Эта сумма, теоретически должна отражать количество минут физической активности проведенных во время работы, 
+перемещений по городу, а так же досуга. Главная проблема такой оценки состоит в большой субъективности 
+подобных оценок, некоторые люди могут иметь тенденцию завышать эти оценки. Можно попробовать также использовать 
+комбинацию бинарных флагов для этих же занятий как ординальную переменную, однако в таком случае 
+мы сталкиваемся с проблемой невозможности оценки равноценности вклада каждого из факторов между 
+собой и между субъектами.
+
+Могу предположить, что показатель гликированного гемоглобина может быть ассоццирован с тремя 
+основными факторами: 
+  1. Количество потребляемых углеводов, то есть качество и тип пищевого поведения; <br> 
+  2. Скорость метаболизма глюкозы в печени и других органах, скорость конвертации 
+в другие молекулы (жирные кислоты, аминокислоты, гликоген); <br> 
+  3. **Потребление глюкозы мышцами**. <br> 
+
+Эти три фактора так или иначе должны объединять в себе все остальные, приведенные на графе.
+Характеристики когорты по новым параметрам физической активности:
+
+```{r, include=FALSE}
+data <- data %>% 
+  mutate(
+    Physical.act.min = PAD615 + PAD645 + PAD660 + PAD630 + PAD675,
+    Physical.act.ord = abs(PAQ605-2) + abs(PAQ635-2) + abs(PAQ650-2) + abs(PAQ620-2) + abs(PAQ665-2)
+  ) %>% filter(Physical.act.min < 1000)
+```
+
+```{r, echo=FALSE}
+columns <- c(
+  "Physical.act.min", "Physical.act.ord"
+)
+
+data %>% 
+  select(columns) %>% 
+  tbl_summary(
+    type = list(all_continuous() ~ "continuous2"),
+  statistic = list(
+    all_continuous() ~ c("{mean} ({sd})", "{median} ({p25}-{p75})", "{min}-{max}")
+  )) %>%
+  modify_footnote(everything() ~ NA) %>%
+  bold_labels()
+```
+
+Профиль физической активности у субъектов когорты:
+
+```{r, echo=FALSE}
+data %>% 
+  ggplot() +
+  geom_density(aes(x=Physical.act.min), fill="lightblue", color="black") +
+  theme_minimal()
+```
+
+Зависимость уровня гликированного гемоглобина от уровня физической активности:
+
+```{r, echo=FALSE}
+data %>% 
+  rename(Glycohemoglobin = LBXGH) %>% 
+  ggplot() +
+  geom_point(aes(x=Physical.act.min, y=Glycohemoglobin)) +
+  theme_minimal()
+```
+
+Можно заметить обратную нелинейную зависимость (не каузальную) уровня гликированного 
+гемоглобина от физической активности, пациенты с высоким (более 300 минут) имеют 
+больший разброс уровняли гликированного гемоглобина. Исходя из этого, можно разделить
+пациентов на следующией группы: `Zero`: 0 минут физической активности, 
+`Average`: нижние 75% пациентов по физической активности, у которых она выше нуля;
+`High`: верхние 25% пациентов по физической активности, у которых она выше нуля.
+
+```{r, echo=FALSE}
+quantiles <- quantile(data %>% filter(Physical.act.min > 0) %>% pull(Physical.act.min), 
+         c(0.25, 0.5, 0.75))
+
+data <- data %>% 
+  mutate(
+    Physical.act.disc = factor(case_when(
+      Physical.act.min == 0 ~ "Zero",
+      Physical.act.min > 0 & Physical.act.min <= quantiles[1] ~ "Average",
+      Physical.act.min > quantiles[1] & Physical.act.min <= quantiles[2] ~ "Average",
+      Physical.act.min > quantiles[2] & Physical.act.min <= quantiles[3] ~ "Average",
+      Physical.act.min > quantiles[3] ~ "High",
+    ), levels=c("Zero", "Low", "Average", "High"))
+  )
+
+data %>% 
+  rename(Glycohemoglobin = LBXGH) %>% 
+  ggplot() +
+  geom_boxplot(aes(x=Physical.act.disc, y=Glycohemoglobin)) +
+  theme_minimal()
+```
+
+Профиль уровня гликированного гемоглобина по когорте:
+
+```{r}
+data %>% 
+  rename(Glycohemoglobin = LBXGH) %>% 
+  ggplot() +
+  geom_density(aes(x=Glycohemoglobin), fill="lightblue", color="black") +
+  theme_minimal()
+```
+
+Чтобы линеаризовать зависимость и сдвинуть распределение к более нормальному 
+проведем логарифмическую трансформацию:
+
+```{r}
+data %>% 
+  rename(Glycohemoglobin = LBXGH) %>% 
+  ggplot() +
+  geom_density(aes(x=log(Glycohemoglobin)), fill="lightblue", color="black") +
+  theme_minimal()
+```
+```{r, echo=FALSE}
+# подготовка датасета для регерссионного анализа
+
+data %>% 
+  select(
+    Physical.act.min, 
+    Physical.act.ord,
+    Physical.act.disc, #Explanatory variable
+    BMXBMI, #BMI
+    RIAGENDR, #Sex
+    RIDAGEYR, #Age
+    RIDRETH3, #Race
+    DMDEDUC2, #Education level
+    DMDMARTL, #Marital status (IV)
+    INDFMIN2, #Income
+    DR1TSUGR, #Total sugars
+    DR1TTFAT, #Total fat
+    DR1TCHOL, #Cholesterol
+    LBXGH, #Outcome,
+    SMQ040, #Smoking status
+    SMQ020,
+    DR1TALCO, #Alcohol consumption
+    MCQ035, # Asthma
+    MCQ170M, #Thyroid problems
+    MCQ160O, #COPD
+    DRQSDT3, #Low salt
+    DR1TKCAL, #Energy
+    MCQ220 #Malignancies
+  ) %>% 
+  rename_with(~ c(
+    "Physical.act.min", "Physical.act.ord", "Physical.act.disc", "BMI", 
+    "Sex", "Age.Years", "Race", "Education",
+    "Marital.Status", "Family.Income", "Total.Sugars", 
+    "Total.fat", "Cholesterol", "Glycohemoglobin",
+    "Smoking.Status", "Ever.Smoked", "Alcohol.Consumption", 
+    "Asthma", "Thyroid.Disease", 
+    "COPD", "Low.Salt", "Energy", "Malignancy.Status"
+  )) %>% 
+  mutate(
+    Sex = as.factor(ifelse(Sex == 1, "Male", "Female")),
+    Race = as.factor(case_when(
+      Race == 1 ~ "Hispanic",
+      Race == 2 ~ "Hispanic",
+      Race == 3 ~ "White",
+      Race == 4 ~ "Black",
+      Race == 6 ~ "Asian",
+      Race == 7 ~ "Other",
+      TRUE ~ NA
+    )),
+    Education = factor(case_when(
+      Education == 1 ~ "Lower.secondary",
+      Education == 2 ~ "Upper.secondary",
+      Education == 3 ~ "High.School.Grad",
+      Education == 4 ~ "College",
+      Education == 5 ~ "Post.College",
+      TRUE ~ NA
+    ), 
+    levels = c("Lower.secondary", "Upper.secondary", 
+               "High.School.Grad",
+               "College", "Post.College"),
+    ordered = TRUE),
+    Family.Income = factor(Family.Income, ordered = TRUE),
+    Marital.Status = as.factor(case_when(
+      Marital.Status == 1 ~ "Cohabitants", #Married
+      Marital.Status == 2 ~ "Widowed",
+      Marital.Status == 3 ~ "Separated", #Divorced
+      Marital.Status == 4 ~ "Separated",
+      Marital.Status == 5 ~ "Single",
+      Marital.Status == 6 ~ "Cohabitants", #Living together, non-married
+      TRUE ~ NA
+    )),
+    Smoking.Status = as.factor(case_when(
+      Ever.Smoked == 2 ~ "Never",
+      Ever.Smoked == 1 & Smoking.Status == 1 ~ "Frequent.Smoker",
+      Ever.Smoked == 1 & Smoking.Status == 2 ~ "Rare.Smoker",
+      Ever.Smoked == 1 & Smoking.Status == 3 ~ "Former.Smoker",
+      TRUE ~ NA
+    )),
+    Smoking.Status = relevel(Smoking.Status, ref = "Never"),
+    Asthma = relevel(as.factor(ifelse(Asthma == 1, "Yes", "No")), ref = "No"),
+    Thyroid.Disease = relevel(as.factor(ifelse(Thyroid.Disease == 1, "Yes", "No")), ref = "No"),
+    COPD = relevel(as.factor(ifelse(COPD == 1, "Yes", "No")), ref = "No"),
+    Malignancy.Status = relevel(as.factor(ifelse(Malignancy.Status == 1, "Yes", "No")), ref = "No"),
+    Low.Salt = relevel(as.factor(ifelse(Low.Salt == 1, "Yes", "No")), ref = "No"),
+  ) %>% 
+  select(-Ever.Smoked) -> data_prepared
+```
+
+Параметры из графа: <br>
+
+*Race* - конфаундер <br>
+*Education* - конфаундер <br>
+*Family income* - конфаундер <br>
+*Smoking* - прокси-конфаундер <br>
+*Age* - конфаундер <br>
+*Comorbidities* - конфаундер <br>
+*Sex* - конфаундер <br>
+*Blood pressure* - коллайдер <br>
+*Diabetic medication* - коллайдер <br>
+*Marital status* - instrumental variable <br>
+
+На первом этапе я собираюсь включить в модель все конфаундеры, а затем, если необходимо, 
+убрать те, которые не объясняют никакой дополнительной вариации отклика, при помощи 
+goodness-of-fit тестов. Также необходимо учесть наличие инструментальной переменной, 
+на первом этапе, я буду контролировать то, что она не скоррелирована с зависмой 
+перменной (физической активностью) и нескоррелирована с остатками модели.
+
+Помимо включенных в граф факторов, я также считаю необходимым внести в модель фактор, 
+отражающий потребление углеводов.
+
+Из коморбидностей я не буду включать в граф помимо повышенного давления коронарную 
+болезнь сердца, инфаркт и инсульт, так как это тоже коллайдеры.
+
+# Регрессионный анализ
+
+На первом этапе построим избыточную модель:
+
+```{r, echo=FALSE}
+formula_full <- formula(log(Glycohemoglobin) ~ Physical.act.disc + Sex + Age.Years 
+                        + Race + Education + log(BMI) + 
+                          log(Alcohol.Consumption + 1) + Low.Salt + Energy
+                        + Family.Income 
+                        + log(Total.Sugars + 1) 
+                        + Smoking.Status + Asthma + Thyroid.Disease + COPD + 
+                          Malignancy.Status)
+
+model_full <- lm(formula_full, data_prepared %>% filter(Energy < 10000))
+summary(model_full)
+```
+После экспериментирования и визуальной диагностики модели, оказалось, что некоторые 
+параметры лучше прологарифмировать. Более того, судя по всему, в наших данных есть 
+проблема с гетероскедастичностью, что нарушает предположения линейной модели. Эту 
+проблему не получилось решить трансформациями, поэтому пришлось прибегнуть к моделям 
+другого типа (glm с Gamma распределением, gls с различными поправками дисперсии), 
+но это так же не помогло побороть гетерескдеастичность.
+
+## Диагностика избыточной модели
+
+Модель действительно сильно подвержена гетерскедастичности, что видно по 
+расширяющемуся "облаку" остатков:
+
+```{r, echo=FALSE, fig.width=7, fig.height=7}
+autoplot(model_full) +
+  theme_bw()
+```
+
+```{r, echo=FALSE, fig.width=8, fig.height=10}
+check_model(model_full)
+```
+
+При этом сильных выбросов в модели нет:
+
+```{r, echo=FALSE}
+resid_panel(model_full, plots = c("lev", "cookd"))
+```
+
+По ассоциациям с предикторами мы так же не наблюдаем сильных выбросов:
+
+```{r, fig.width=10, fig.height=10, message=FALSE, echo=FALSE}
+resid_xpanel(model_full, smoother = TRUE)
+```
+
+Инструментальная переменная (`Marital.Status`) не связана с остатками (ANOVA):
+
+```{r, echo=FALSE}
+data_prepared %>% filter(Energy < 10000) %>% 
+  ggplot(aes(x = Marital.Status, 
+                   y = resid(model_full), 
+                   fill = Marital.Status)) +
+  geom_boxplot() +
+  labs(y = "Residuals") +
+  ggpubr::stat_compare_means(method = "anova", label = "p.format") +
+  theme_bw()
+```
+
+## Подгонка модели
+
+При помощи других подходов с различными вариациями мне не получилось побороть 
+гетероскедастичность, поэтому далее я буду использовать линейную модель, 
+для которой затем буду корректировать стандартные ошибки.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+car::Anova(model_full, type="II", white.adjust = "hc4") %>% 
+  round(4) %>% 
+  broom::tidy() %>% 
+  gt::gt(caption = "ANOVA analysis results", rowname_col = "term", row_group_as_column = TRUE) 
+  
+```
+
+Можно обратить внимание, что размер эффекта некоторых факторов в избыточной модели 
+не отличается значимо от нуля. Подтвердим наблюдение при помощи анализа goodness-of-fit 
+вложенных моделей:
+
+
+```{r, echo=FALSE}
+get_anova_results <- function(factor_to_exclude, model=model_full, df=data_prepared) {
+  model.red <- update(model, as.formula(paste(". ~ . -", factor_to_exclude)))
+  res <- anova(model, model.red)[2, ][c("F", "Pr(>F)")]
+  rownames(res) <- factor_to_exclude
+  return(res)
+  res_df <- as.data.frame(t(res))
+  res_df$factor <- factor_to_exclude
+} 
+
+factors_to_test <- c( "Physical.act.disc",
+  "Sex", "Age.Years", "Race", "Education", "log(BMI)", "log(Alcohol.Consumption + 1)",
+  "Low.Salt", "Energy", "Family.Income", "log(Total.Sugars + 1)", "Smoking.Status", "Asthma",
+  "Thyroid.Disease", "COPD", "Malignancy.Status"
+)
+
+bind_rows(lapply(factors_to_test, get_anova_results)) %>% 
+  round(5) %>% 
+  broom::tidy() %>% 
+  gt::gt() %>%
+  gt::tab_style(
+    style = cell_text(weight = "bold", color = "black"),
+    locations = cells_column_labels(columns = "p.value")
+  ) %>%
+  gt::tab_style(
+    style = cell_text(weight = "bold", color = "black"),
+    locations = cells_body(columns = "p.value", rows = p.value < 0.05)
+  )
+  
+```
+
+Исключив незначимые факторы, получим финальную модель:
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+model_reduced <- update(model_full, .~. -Sex-Education-Low.Salt-Family.Income-Smoking.Status-Asthma-Thyroid.Disease-COPD-Malignancy.Status)
+
+model_reduced %>% 
+  broom::tidy() %>% 
+  mutate(across(where(is.numeric), round, 5)) %>% 
+  gt::gt() %>%
+  gt::tab_style(
+    style = cell_text(weight = "bold", color = "black"),
+    locations = cells_column_labels(columns = "p.value")
+  ) %>%
+  gt::tab_style(
+    style = cell_text(weight = "bold", color = "black"),
+    locations = cells_body(columns = "p.value", rows = p.value < 0.05)
+  )
+```
+
+Проверим гипотезу модификации эффекта физической активности на гликированный
+гемоглобин в зависимости от биологического пола:
+
+```{r, echo=FALSE}
+model_inter <- update(model_reduced, .~. +Sex*Physical.act.disc)
+aov(model_inter) %>% 
+  broom::tidy() %>% 
+  mutate(across(where(is.numeric), round, 5)) %>% 
+  gt::gt() %>%
+  gt::tab_style(
+    style = cell_text(weight = "bold", color = "black"),
+    locations = cells_column_labels(columns = "p.value")
+  ) %>%
+  gt::tab_style(
+    style = cell_text(weight = "bold", color = "black"),
+    locations = cells_body(columns = "p.value", rows = p.value < 0.05)
+  )
+```
+В данном случае мы не можем отвергнуть нулевую гипотезу и в дальнейшее включение 
+в модель факторов пола и взаимодействия пола и физической активности не имеет смысла. 
+
+```{r, echo=FALSE}
+coef_reduced <- lmtest::coeftest(model_reduced, vcov. = vcovHC, type = "HC4")
+ci_reduced <- lmtest::coefci(model_reduced, vcov. = vcovHC, type = "HC4")
+
+data.frame(cbind(coef_reduced, ci_reduced)) %>% 
+  mutate(Factor = rownames(coef_reduced)) %>% 
+  select(Factor, everything()) %>% 
+  rename_with(~ c("Factor", "Estimate", "SE", "t.value", "p.value", "lwr.CI", "upr.CI")) %>% 
+  mutate(Estimate = exp(Estimate), 
+         Change = Estimate - 1, 
+         lwr.CI = exp(lwr.CI), 
+         upr.CI = exp(upr.CI),
+         lwr.CI.change = lwr.CI - 1,
+         upr.CI.change = upr.CI - 1) %>% 
+  mutate(across(where(is.numeric), round, 5)) %>% 
+  gt::gt() %>%
+  gt::tab_style(
+    style = cell_text(weight = "bold", color = "black"),
+    locations = cells_column_labels(columns = "p.value")
+  ) %>%
+  gt::tab_style(
+    style = cell_text(weight = "bold", color = "black"),
+    locations = cells_body(columns = "p.value", rows = p.value < 0.05)
+  )
+
+```
+
+Интерпретация:
+
+Физическая активность на среднем уровне снижает уровень гликированного гемоглобина 
+при прочих равных на 2.37%. Поскольку доверительный интервал оценок коэффициентов (Estimate)
+включает 1 и р-значение > 0.05 для Average, то можно говорить о том, что средняя физическая 
+активность при прочих равных не значимо влияет на уровень гликированного гемоглобина.
+
+Оценка влияния физической активности без учета остальных ковариат:
+
+```{r, echo=FALSE}
+model_shallow <- update(model_reduced, . ~ Physical.act.disc)
+
+coef_shallow <- lmtest::coeftest(model_shallow, vcov. = vcovHC, type = "HC4")
+ci_shallow <- lmtest::coefci(model_shallow, vcov. = vcovHC, type = "HC4")
+
+data.frame(cbind(coef_shallow, ci_shallow)) %>% 
+  mutate(Factor = rownames(coef_shallow)) %>% 
+  select(Factor, everything()) %>% 
+  rename_with(~ c("Factor", "Estimate", "SE", "t.value", "p.value", "lwr.CI", "upr.CI")) %>% 
+  mutate(Estimate = exp(Estimate), 
+         Change = Estimate - 1, 
+         lwr.CI = exp(lwr.CI), 
+         upr.CI = exp(upr.CI),
+         lwr.CI.change = lwr.CI - 1,
+         upr.CI.change = upr.CI - 1) %>% 
+  mutate(across(where(is.numeric), round, 5)) %>% 
+  gt::gt() %>%
+  gt::tab_style(
+    style = cell_text(weight = "bold", color = "black"),
+    locations = cells_column_labels(columns = "p.value")
+  ) %>%
+  gt::tab_style(
+    style = cell_text(weight = "bold", color = "black"),
+    locations = cells_body(columns = "p.value", rows = p.value < 0.05)
+  )
+```
+
+Похожий вывод мы можем сделать из модели с одним фактором, хотя влияние будет несколько выше:
+Физическая активность на среднем уровне снижает уровень гликированного гемоглобина при прочих равных
+на 4.89% [7.25%;2.34%]. Поскольку доверительный интервал оценок коэффициентов (Estimate)
+не включает 1 для Average, то можно говорить о том, что средняя физическая активность при
+прочих равных значимо влияет на уровень гликированного гемоглобина.
+
+Физическая активность на высоком уровне также снижает уровень гликированного гемоглобина при прочих равных
+на 3.73% [6.95%;0.42%]. Поскольку доверительный интервал оценок коэффициентов (Estimate)
+не включает 1 для High, то можно говорить о том, что высокая физическая активность при
+прочих равных значимо влияет на уровень гликированного гемоглобина.
+
+Изменение уровня гликированного гемоглобина отличается в ожидаемую сторону (мы ожидали снижение), 
+тем не менее, вероятно, другие ковариаты, связанные с физической активностью, объясняют часть эффекта, что делает 
+размер эффектов физической активности статистически незначимо отличающимся от нуля в полной модели.
+
+В этом исследовании (https://pmc.ncbi.nlm.nih.gov/articles/PMC4310078/) в популяции здоровых субъектов
+процент гликированного гемоглобина варьируется в диапазоне +-9.14%. Исходя из этого значения, я бы сделал 
+вывод о клинической незначимости влияния параметра физической активности на процент гликированного гемоглобина в данной популяции.
+
+
+
+
+
+
+
+
+
+
